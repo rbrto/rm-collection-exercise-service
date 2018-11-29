@@ -7,6 +7,7 @@ import java.util.HashMap;
 import java.util.List;
 import java.util.UUID;
 import org.springframework.beans.factory.annotation.Qualifier;
+import org.springframework.cache.annotation.Cacheable;
 import org.springframework.core.ParameterizedTypeReference;
 import org.springframework.http.HttpEntity;
 import org.springframework.http.HttpMethod;
@@ -88,6 +89,7 @@ public class ActionSvcClient {
     return createdActionPlan;
   }
 
+  @Cacheable("actionplans")
   public ActionPlanDTO getActionPlanBySelectorsBusiness(
       String collectionExerciseId, boolean activeEnrolment) throws CTPException {
 

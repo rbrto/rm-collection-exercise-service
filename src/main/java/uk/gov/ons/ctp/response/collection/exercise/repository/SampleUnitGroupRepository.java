@@ -1,6 +1,7 @@
 package uk.gov.ons.ctp.response.collection.exercise.repository;
 
 import java.util.List;
+import java.util.stream.Stream;
 import org.springframework.data.domain.Pageable;
 import org.springframework.data.jpa.repository.JpaRepository;
 import org.springframework.stereotype.Repository;
@@ -39,6 +40,9 @@ public interface SampleUnitGroupRepository extends JpaRepository<ExerciseSampleU
           List<Integer> excludedGroups,
           Pageable pageable);
 
+  Stream<ExerciseSampleUnitGroup> findByStateFKAndCollectionExerciseInOrderByCreatedDateTimeAsc(
+      SampleUnitGroupDTO.SampleUnitGroupState state, List<CollectionExercise> exercises);
+
   /**
    * Query repository for SampleUnitGroups by state and belonging to a collection exercise. Order by
    * ModifiedDateTime ascending.
@@ -55,4 +59,7 @@ public interface SampleUnitGroupRepository extends JpaRepository<ExerciseSampleU
           CollectionExercise exercise,
           List<Integer> excludedGroups,
           Pageable pageable);
+
+  Stream<ExerciseSampleUnitGroup> findByStateFKAndCollectionExerciseOrderByModifiedDateTimeAsc(
+      SampleUnitGroupDTO.SampleUnitGroupState state, CollectionExercise exercise);
 }

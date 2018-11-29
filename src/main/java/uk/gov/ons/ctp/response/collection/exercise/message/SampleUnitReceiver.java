@@ -4,6 +4,7 @@ import net.sourceforge.cobertura.CoverageIgnore;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.integration.annotation.MessageEndpoint;
 import org.springframework.integration.annotation.ServiceActivator;
+import org.springframework.scheduling.annotation.Async;
 import uk.gov.ons.ctp.common.error.CTPException;
 import uk.gov.ons.ctp.response.collection.exercise.service.SampleService;
 import uk.gov.ons.ctp.response.sampleunit.definition.SampleUnit;
@@ -25,6 +26,7 @@ public class SampleUnitReceiver {
    * @throws CTPException when collection exercise state transition error
    */
   @ServiceActivator(inputChannel = "sampleUnitTransformed", adviceChain = "sampleUnitRetryAdvice")
+  @Async
   public void acceptSampleUnit(final SampleUnit sampleUnit) throws CTPException {
     sampleService.acceptSampleUnit(sampleUnit);
   }

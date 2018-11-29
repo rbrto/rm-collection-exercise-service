@@ -6,15 +6,21 @@ import java.sql.Timestamp;
 import java.util.ArrayList;
 import java.util.Date;
 import java.util.HashMap;
+import java.util.LinkedList;
 import java.util.List;
 import java.util.Map;
 import java.util.UUID;
+import java.util.concurrent.Callable;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
 import java.util.stream.Collectors;
+import java.util.stream.Stream;
 import org.apache.commons.collections.CollectionUtils;
 import org.json.JSONObject;
 import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.data.domain.PageRequest;
 import org.springframework.stereotype.Component;
+import org.springframework.transaction.annotation.Transactional;
 import org.springframework.web.client.RestClientException;
 import uk.gov.ons.ctp.common.distributed.DistributedListManager;
 import uk.gov.ons.ctp.common.distributed.LockingException;
@@ -27,6 +33,7 @@ import uk.gov.ons.ctp.response.collection.exercise.config.AppConfig;
 import uk.gov.ons.ctp.response.collection.exercise.domain.CollectionExercise;
 import uk.gov.ons.ctp.response.collection.exercise.domain.ExerciseSampleUnit;
 import uk.gov.ons.ctp.response.collection.exercise.domain.ExerciseSampleUnitGroup;
+import uk.gov.ons.ctp.response.collection.exercise.repository.SampleUnitGroupRepository;
 import uk.gov.ons.ctp.response.collection.exercise.repository.SampleUnitRepository;
 import uk.gov.ons.ctp.response.collection.exercise.representation.CollectionExerciseDTO;
 import uk.gov.ons.ctp.response.collection.exercise.representation.CollectionExerciseDTO.CollectionExerciseEvent;
@@ -46,6 +53,7 @@ import uk.gov.ons.response.survey.representation.SurveyClassifierTypeDTO;
 @Component
 public class ValidateSampleUnits {
   private static final Logger log = LoggerFactory.getLogger(ValidateSampleUnits.class);
+  private static final ExecutorService EXECUTOR_SERVICE = Executors.newFixedThreadPool(100);
 
   private static final String CASE_TYPE_SELECTOR = "COLLECTION_INSTRUMENT";
   private static final String VALIDATION_LIST_ID = "group";
@@ -65,6 +73,7 @@ public class ValidateSampleUnits {
   private SurveySvcClient surveySvcClient;
 
   private SampleUnitRepository sampleUnitRepo;
+  private SampleUnitGroupRepository sampleUnitGroupRepo;
 
   private StateTransitionManager<SampleUnitGroupState, SampleUnitGroupEvent> sampleUnitGroupState;
 
@@ -79,6 +88,7 @@ public class ValidateSampleUnits {
       final PartySvcClient partySvcClient,
       final SurveySvcClient surveySvcClient,
       final SampleUnitRepository sampleUnitRepo,
+      final SampleUnitGroupRepository sampleUnitGroupRepo,
       final @Qualifier("sampleUnitGroup") StateTransitionManager<
                   SampleUnitGroupState, SampleUnitGroupEvent>
               sampleUnitGroupState,
@@ -91,11 +101,13 @@ public class ValidateSampleUnits {
     this.partySvcClient = partySvcClient;
     this.surveySvcClient = surveySvcClient;
     this.sampleUnitRepo = sampleUnitRepo;
+    this.sampleUnitGroupRepo = sampleUnitGroupRepo;
     this.sampleUnitGroupState = sampleUnitGroupState;
     this.sampleValidationListManager = sampleValidationListManager;
   }
 
   /** Validate SampleUnits */
+  @Transactional
   public void validateSampleUnits() {
 
     // Make sure that any collection exercises which were having their sample units sent from
@@ -108,12 +120,13 @@ public class ValidateSampleUnits {
       return;
     }
 
-    try {
-      List<ExerciseSampleUnitGroup> sampleUnitGroups = retrieveSampleUnitGroups(exercises);
+    try (Stream<ExerciseSampleUnitGroup> sampleUnitGroups =
+        sampleUnitGroupRepo.findByStateFKAndCollectionExerciseInOrderByCreatedDateTimeAsc(
+            SampleUnitGroupState.INIT, exercises)) {
+      //      List<ExerciseSampleUnitGroup> sampleUnitGroups = retrieveSampleUnitGroups(exercises);
       Map<CollectionExercise, List<ExerciseSampleUnitGroup>> collections =
-          sampleUnitGroups
-              .stream()
-              .collect(Collectors.groupingBy(ExerciseSampleUnitGroup::getCollectionExercise));
+          sampleUnitGroups.collect(
+              Collectors.groupingBy(ExerciseSampleUnitGroup::getCollectionExercise));
 
       collections.forEach(
           (exercise, groups) -> {
@@ -128,14 +141,14 @@ public class ValidateSampleUnits {
             }
           });
 
-    } catch (LockingException ex) {
-      log.error("Failed to get lock", ex);
+      //    } catch (LockingException ex) {
+      //      log.error("Failed to get lock", ex);
     } finally {
-      try {
-        sampleValidationListManager.deleteList(VALIDATION_LIST_ID, true);
-      } catch (LockingException ex) {
-        log.error("Failed to delete lock list", ex);
-      }
+      //      try {
+      //        sampleValidationListManager.deleteList(VALIDATION_LIST_ID, true);
+      //      } catch (LockingException ex) {
+      //        log.error("Failed to delete lock list", ex);
+      //      }
     }
   }
 
@@ -226,27 +239,51 @@ public class ValidateSampleUnits {
               "%s, surveyId: %s", SURVEY_CLASSIFIER_TYPES_NOT_FOUND, exercise.getId().toString()));
     }
 
+    List<Callable<Boolean>> callables = new LinkedList<>();
     for (ExerciseSampleUnitGroup sampleUnitGroup : sampleUnitGroups) {
-      List<ExerciseSampleUnit> sampleUnits = sampleUnitSvc.findBySampleUnitGroup(sampleUnitGroup);
-      for (ExerciseSampleUnit sampleUnit : sampleUnits) {
-        try {
-          UUID collectionInstrumentId =
-              requestCollectionInstrumentId(
-                  classifierTypes, sampleUnit, exercise.getSurveyId().toString());
-          sampleUnit.setCollectionInstrumentId(collectionInstrumentId);
+      callables.add(
+          () -> {
+            List<ExerciseSampleUnit> sampleUnits =
+                sampleUnitSvc.findBySampleUnitGroup(sampleUnitGroup);
 
-          if (sampleUnit.getSampleUnitType() == SampleUnitDTO.SampleUnitType.B) {
-            PartyDTO party =
-                partySvcClient.requestParty(
-                    sampleUnit.getSampleUnitType(), sampleUnit.getSampleUnitRef());
-            sampleUnit.setPartyId(UUID.fromString(party.getId()));
-          }
-        } catch (RestClientException ex) {
-          log.with("sample_unit_group_PK", sampleUnitGroup.getSampleUnitGroupPK())
-              .error("Error in validation of SampleUnitGroup", ex);
-        }
+            // There's only ever one goddam sample unit in a goddam sample group dagnammit
+            // IT'S A TRICK IT'S A TRICK IT'S ALL A GODDAM TRICK
+            for (ExerciseSampleUnit sampleUnit : sampleUnits) {
+              doStuff(classifierTypes, sampleUnit, exercise, sampleUnitGroup);
+            }
+
+            saveUpdatedSampleUnits(sampleUnitGroup, sampleUnits);
+            return Boolean.TRUE;
+          });
+    }
+
+    try {
+      EXECUTOR_SERVICE.invokeAll(callables);
+    } catch (InterruptedException e) {
+      e.printStackTrace(); // TODO: Don't care at the moment... just hacking performance
+    }
+  }
+
+  private void doStuff(
+      List<String> classifierTypes,
+      ExerciseSampleUnit sampleUnit,
+      CollectionExercise exercise,
+      ExerciseSampleUnitGroup sampleUnitGroup) {
+    try {
+      UUID collectionInstrumentId =
+          requestCollectionInstrumentId(
+              classifierTypes, sampleUnit, exercise.getSurveyId().toString());
+      sampleUnit.setCollectionInstrumentId(collectionInstrumentId);
+
+      if (sampleUnit.getSampleUnitType() == SampleUnitDTO.SampleUnitType.B) {
+        PartyDTO party =
+            partySvcClient.requestParty(
+                sampleUnit.getSampleUnitType(), sampleUnit.getSampleUnitRef());
+        sampleUnit.setPartyId(UUID.fromString(party.getId()));
       }
-      saveUpdatedSampleUnits(sampleUnitGroup, sampleUnits);
+    } catch (RestClientException ex) {
+      log.with("sample_unit_group_PK", sampleUnitGroup.getSampleUnitGroupPK())
+          .error("Error in validation of SampleUnitGroup", ex);
     }
   }
 

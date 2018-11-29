@@ -3,17 +3,22 @@ package uk.gov.ons.ctp.response.collection.exercise.distribution;
 import com.godaddy.logging.Logger;
 import com.godaddy.logging.LoggerFactory;
 import java.sql.Timestamp;
-import java.util.ArrayList;
 import java.util.Date;
+import java.util.LinkedList;
 import java.util.List;
 import java.util.UUID;
+import java.util.concurrent.Callable;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
 import java.util.stream.Collectors;
+import java.util.stream.Stream;
 import org.apache.commons.collections.CollectionUtils;
 import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.data.domain.PageRequest;
 import org.springframework.stereotype.Component;
 import org.springframework.transaction.PlatformTransactionManager;
 import org.springframework.transaction.TransactionStatus;
+import org.springframework.transaction.annotation.Transactional;
 import org.springframework.transaction.support.TransactionCallbackWithoutResult;
 import org.springframework.transaction.support.TransactionTemplate;
 import uk.gov.ons.ctp.common.distributed.DistributedListManager;
@@ -48,6 +53,8 @@ import uk.gov.ons.ctp.response.sample.representation.SampleUnitDTO;
 @Component
 public class SampleUnitDistributor {
   private static final Logger log = LoggerFactory.getLogger(SampleUnitDistributor.class);
+
+  private static final ExecutorService EXECUTOR_SERVICE = Executors.newFixedThreadPool(100);
 
   private static final String DISTRIBUTION_LIST_ID = "group";
   private static final String ENABLED = "ENABLED";
@@ -111,40 +118,56 @@ public class SampleUnitDistributor {
    *
    * @param exercise for which to distribute sample units
    */
+  @Transactional
   public void distributeSampleUnits(CollectionExercise exercise) {
 
-    List<ExerciseSampleUnitGroup> sampleUnitGroups = new ArrayList<>();
-    try {
-      sampleUnitGroups = retrieveSampleUnitGroups(exercise);
-    } catch (LockingException ex) {
-      log.error("Sample Unit Distribution failed", ex);
-    }
-    if (sampleUnitGroups.isEmpty()) {
-      log.with("collection_exercise_id", exercise.getId())
-          .debug("No sample unit groups to distribute for exercise");
-      return;
-    }
+    //    List<ExerciseSampleUnitGroup> sampleUnitGroups = new ArrayList<>();
+    //    try {
+    //      sampleUnitGroups = retrieveSampleUnitGroups(exercise);
+    //    } catch (LockingException ex) {
+    //      log.error("Sample Unit Distribution failed", ex);
+    //    }
+    //    if (sampleUnitGroups.isEmpty()) {
+    //      log.with("collection_exercise_id", exercise.getId())
+    //          .debug("No sample unit groups to distribute for exercise");
+    //      return;
+    //    }
+    List<Callable<Boolean>> callables = new LinkedList<>();
 
-    // Catch errors distributing sample units so that only failing units are stopped
-    sampleUnitGroups.forEach(
-        sampleUnitGroup -> {
-          try {
-            distributeSampleUnitGroup(exercise, sampleUnitGroup);
-          } catch (CTPException ex) {
-            log.with("sampleUnitGroupPK", sampleUnitGroup.getSampleUnitGroupPK())
-                .error("Failed to distribute sample unit group", ex);
-          }
-        });
+    try (Stream<ExerciseSampleUnitGroup> sampleUnitGroups =
+        sampleUnitGroupRepo.findByStateFKAndCollectionExerciseOrderByModifiedDateTimeAsc(
+            SampleUnitGroupDTO.SampleUnitGroupState.VALIDATED, exercise)) {
+      // Catch errors distributing sample units so that only failing units are stopped
+      sampleUnitGroups.forEach(
+          sampleUnitGroup -> {
+            callables.add(
+                () -> {
+                  try {
+                    distributeSampleUnitGroup(exercise, sampleUnitGroup);
+                  } catch (CTPException ex) {
+                    log.with("sampleUnitGroupPK", sampleUnitGroup.getSampleUnitGroupPK())
+                        .error("Failed to distribute sample unit group", ex);
+                  }
+                  return Boolean.TRUE;
+                });
+          });
+
+      try {
+        EXECUTOR_SERVICE.invokeAll(callables);
+      } catch (InterruptedException e) {
+        e.printStackTrace(); // TODO: Don't care at the moment... just hacking performance
+      }
+    }
 
     // Collection exercise will transition to LIVE/READY_FOR_LIVE
     // if all sample units were distributed successfully
     collectionExerciseTransitionState(exercise);
 
-    try {
-      sampleDistributionListManager.deleteList(DISTRIBUTION_LIST_ID, true);
-    } catch (LockingException ex) {
-      log.error("Failed to release sampleDistributionListManager data", ex);
-    }
+    //    try {
+    //      sampleDistributionListManager.deleteList(DISTRIBUTION_LIST_ID, true);
+    //    } catch (LockingException ex) {
+    //      log.error("Failed to release sampleDistributionListManager data", ex);
+    //    }
   }
 
   /**
