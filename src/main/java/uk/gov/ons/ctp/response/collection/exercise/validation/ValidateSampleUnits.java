@@ -53,7 +53,7 @@ import uk.gov.ons.response.survey.representation.SurveyClassifierTypeDTO;
 @Component
 public class ValidateSampleUnits {
   private static final Logger log = LoggerFactory.getLogger(ValidateSampleUnits.class);
-  private static final ExecutorService EXECUTOR_SERVICE = Executors.newFixedThreadPool(100);
+  private static final ExecutorService EXECUTOR_SERVICE = Executors.newFixedThreadPool(50);
 
   private static final String CASE_TYPE_SELECTOR = "COLLECTION_INSTRUMENT";
   private static final String VALIDATION_LIST_ID = "group";

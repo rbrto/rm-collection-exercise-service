@@ -54,7 +54,7 @@ import uk.gov.ons.ctp.response.sample.representation.SampleUnitDTO;
 public class SampleUnitDistributor {
   private static final Logger log = LoggerFactory.getLogger(SampleUnitDistributor.class);
 
-  private static final ExecutorService EXECUTOR_SERVICE = Executors.newFixedThreadPool(100);
+  private static final ExecutorService EXECUTOR_SERVICE = Executors.newFixedThreadPool(50);
 
   private static final String DISTRIBUTION_LIST_ID = "group";
   private static final String ENABLED = "ENABLED";

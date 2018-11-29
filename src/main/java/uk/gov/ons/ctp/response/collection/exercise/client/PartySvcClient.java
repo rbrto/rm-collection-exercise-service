@@ -3,6 +3,7 @@ package uk.gov.ons.ctp.response.collection.exercise.client;
 import com.godaddy.logging.Logger;
 import com.godaddy.logging.LoggerFactory;
 import org.springframework.beans.factory.annotation.Qualifier;
+import org.springframework.cache.annotation.Cacheable;
 import org.springframework.http.HttpEntity;
 import org.springframework.http.HttpMethod;
 import org.springframework.http.ResponseEntity;
@@ -48,6 +49,7 @@ public class PartySvcClient {
       value = {RestClientException.class},
       maxAttemptsExpression = "#{${retries.maxAttempts}}",
       backoff = @Backoff(delayExpression = "#{${retries.backoff}}"))
+  @Cacheable("parties")
   public PartyDTO requestParty(SampleUnitDTO.SampleUnitType sampleUnitType, String sampleUnitRef) {
     log.with("sample_unit_type", sampleUnitType)
         .with("sample_unit_ref", sampleUnitRef)
